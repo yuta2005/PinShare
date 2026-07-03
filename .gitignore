@@ -1,0 +1,19 @@
+# 仮想環境
+venv/
+.venv/
+
+# Python キャッシュ
+__pycache__/
+*.py[cod]
+*.pyo
+
+# VS Code（settings.jsonは共有するので除外しない）
+# .vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ログ・一時ファイル
+*.log
+*.tmp

@@ -1,0 +1,8 @@
+{
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "ruff.enable": true,
+  "python.defaultInterpreterPath": "${workspaceFolder}/venv/Scripts/python.exe"
+}
