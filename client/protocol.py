@@ -43,13 +43,11 @@ CATEGORY_LABELS = {
 DEFAULT_CATEGORY = "other"
 
 
-def send_json(sock: socket.socket, data: dict) -> None:
+def send_json(sock, data):
     """
     JSON を1メッセージ（改行終端）としてソケットに送信する。
-
     - ensure_ascii=False で日本語をそのまま送る。
-    - sendall を使うことで「送信バッファが一杯で一部しか送れない」
-      という send() の部分送信バグを防ぐ。
+    - sendall で send() の部分送信バグを防ぐ。
     """
     line = json.dumps(data, ensure_ascii=False) + "\n"
     sock.sendall(line.encode("utf-8"))
@@ -58,29 +56,21 @@ def send_json(sock: socket.socket, data: dict) -> None:
 class MessageReader:
     """
     ソケットから改行区切りの JSON メッセージを1件ずつ取り出す。
-
-    重要: recv はバイト列で受け取り、バイトのまま改行で区切ってから
-    decode する。文字列にしてから連結すると、日本語などのマルチバイト
-    文字が recv の境界でちょうど分割されたときに UnicodeDecodeError で
-    落ちる。バイト単位でバッファリングすれば安全。
+    バイト単位でバッファリングするため、日本語が recv 境界で分割されても
+    UnicodeDecodeError で落ちない。不正な JSON 行は接続を切らずスキップする。
     """
 
-    def __init__(self, sock: socket.socket, bufsize: int = 4096):
+    def __init__(self, sock, bufsize=4096):
         self.sock = sock
         self.bufsize = bufsize
         self._buffer = b""
 
     def messages(self):
-        """
-        接続が切れるまで、受信した dict を yield し続けるジェネレータ。
-        不正な JSON の行は接続を切らずにスキップする。
-        """
         while True:
             data = self.sock.recv(self.bufsize)
             if not data:  # 相手が切断
                 return
             self._buffer += data
-
             while b"\n" in self._buffer:
                 raw, self._buffer = self._buffer.split(b"\n", 1)
                 raw = raw.strip()
@@ -88,7 +78,6 @@ class MessageReader:
                     continue
                 try:
                     yield json.loads(raw.decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    # 壊れた1行のせいで接続全体を切らない
-                    print(f"[WARN] 不正なメッセージを無視: {e}")
+                except (json.JSONDecodeError, UnicodeDecodeError) as err:
+                    print("[WARN] 不正なメッセージを無視:", err)
                     continue

@@ -171,14 +171,12 @@ class PinSyncServer:
             send_json(sock, data)
         except Exception as e:
             # 送信失敗の後始末は各クライアントの受信スレッド（finally）に任せる。
-            # ここで clients を触るとロック再取得やブロードキャスト再帰の
-            # 恐れがあるため、ログだけに留める。
             print(f"[ERROR] 送信失敗: {e}")
 
     def _broadcast(self, data: dict, exclude: socket.socket = None):
         """全クライアントにJSONをブロードキャスト"""
         with self.lock:
-            # 送信はロック外で行う（点: ロック保持中の送信を避ける）
+            # 送信はロック外で行う（ロック保持中の送信を避ける）
             targets = list(self.clients.keys())
 
         for sock in targets:
