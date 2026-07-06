@@ -5,14 +5,11 @@ PinSync - サーバー
 担当: Aさん（サーバー・ロジック担当）
 """
 
-import json
 import socket
 import threading
 
-# ── 設定 ──────────────────────────────────────────
-HOST = "localhost"
-PORT = 9999
-MAX_CLIENTS = 10
+import protocol
+from protocol import HOST, PORT, MAX_CLIENTS, MessageReader, send_json
 
 print("start server")
 
@@ -55,24 +52,16 @@ class PinSyncServer:
 
     def _handle_client(self, sock: socket.socket):
         """1クライアントの送受信を担当するスレッド"""
-        buffer = ""
+        reader = MessageReader(sock)
         try:
-            while True:
-                # サンプルコードと同じ: recv でデータを受信
-                data = sock.recv(4096).decode("utf-8")
-                if not data:
-                    break
-
-                buffer += data
-                # 改行区切りで1メッセージずつ処理
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if line.strip():
-                        self._handle_message(sock, json.loads(line))
-
+            # MessageReader が UTF-8 境界と不正 JSON を吸収してくれるので
+            # ここでは1メッセージずつ受け取って処理するだけでよい。
+            for msg in reader.messages():
+                self._handle_message(sock, msg)
         except Exception as e:
             print(f"[ERROR] クライアント処理エラー: {e}")
         finally:
+            # 切断検知はここ一箇所に集約する（LEAVE の二重送信を防ぐ）
             self._remove_client(sock)
 
     def _handle_message(self, sock: socket.socket, msg: dict):
@@ -80,20 +69,20 @@ class PinSyncServer:
         msg_type = msg.get("type")
         print(f"[RECV] {msg}")
 
-        if msg_type == "JOIN":
+        if msg_type == protocol.JOIN:
             self._on_join(sock, msg)
 
-        elif msg_type == "LEAVE":
+        elif msg_type == protocol.LEAVE:
             self._on_leave(sock, msg)
 
-        elif msg_type == "PIN_ADD":
+        elif msg_type == protocol.PIN_ADD:
             self._on_pin_add(sock, msg)
 
-        elif msg_type == "PIN_REMOVE":
+        elif msg_type == protocol.PIN_REMOVE:
             self._on_pin_remove(sock, msg)
 
-        elif msg_type == "CHAT":
-            self._broadcast(msg, exclude=None)
+        elif msg_type == protocol.CHAT:
+            self._broadcast(msg)
 
         else:
             print(f"[WARN] 未知のメッセージタイプ: {msg_type}")
@@ -106,40 +95,42 @@ class PinSyncServer:
 
         with self.lock:
             self.clients[sock] = username
+            # ロックを長く握らないよう、送信対象のコピーだけ取る。
+            # （ロック保持中にソケット送信すると、遅いクライアントで
+            #   全スレッドが停止する恐れがあるため）
+            existing_pins = list(self.pins.values())
 
         print(f"[JOIN] {username} が参加 (接続数: {len(self.clients)})")
 
-        # 既存のピンを新規参加者に送信
-        with self.lock:
-            for pin in self.pins.values():
-                self._send_to(sock, pin)
+        # 既存のピンを新規参加者に送信（ロック外で行う）
+        for pin in existing_pins:
+            self._send_to(sock, pin)
 
-        # 全員に参加通知をブロードキャスト
-        self._broadcast({"type": "JOIN", "user": username})
+        # 他の参加者に参加通知（本人には送らない = 自分の参加通知を防ぐ）
+        self._broadcast({"type": protocol.JOIN, "user": username}, exclude=sock)
 
     def _on_leave(self, sock: socket.socket, msg: dict):
-        """クライアント退出時の処理"""
-        username = msg.get("user", "名無し")
-        self._broadcast({"type": "LEAVE", "user": username})
+        """
+        クライアントからの明示的な LEAVE 受信。
+        この直後にソケットが閉じられ _remove_client が呼ばれるため、
+        ここでは通知しない（LEAVE の二重ブロードキャストを防ぐ）。
+        """
+        pass
 
     def _on_pin_add(self, sock: socket.socket, msg: dict):
         """ピン追加時の処理"""
-        # pin_id を採番してメッセージに付与
+        # pin_id を採番してメッセージに付与し、そのまま保存する
         with self.lock:
             self.pin_counter += 1
             pin_id = f"pin_{self.pin_counter}"
-
-        msg["pin_id"] = pin_id
-
-        # ピンデータを保存
-        with self.lock:
+            msg["pin_id"] = pin_id
             self.pins[pin_id] = msg
 
         print(
             f"[PIN] {msg.get('user')} がピン追加: {msg.get('comment', '')} ({pin_id})"
         )
 
-        # 全クライアントにブロードキャスト
+        # 全クライアントにブロードキャスト（送信者本人も自分のピンを表示できる）
         self._broadcast(msg)
 
     def _on_pin_remove(self, sock: socket.socket, msg: dict):
@@ -152,31 +143,42 @@ class PinSyncServer:
         self._broadcast(msg)
 
     def _remove_client(self, sock: socket.socket):
-        """クライアントの切断処理"""
+        """クライアントの切断処理（切断検知の唯一の入口）"""
         with self.lock:
-            username = self.clients.pop(sock, "不明")
+            # 既に削除済みなら二重処理しない
+            if sock not in self.clients:
+                self._safe_close(sock)
+                return
+            username = self.clients.pop(sock)
 
+        self._safe_close(sock)
+
+        print(f"[LEAVE] {username} が切断 (接続数: {len(self.clients)})")
+        self._broadcast({"type": protocol.LEAVE, "user": username})
+
+    @staticmethod
+    def _safe_close(sock: socket.socket):
         try:
             sock.close()
         except Exception:
             pass
-
-        print(f"[LEAVE] {username} が切断 (接続数: {len(self.clients)})")
-        self._broadcast({"type": "LEAVE", "user": username})
 
     # ── 送信 ──────────────────────────────────────
 
     def _send_to(self, sock: socket.socket, data: dict):
         """特定のクライアントにJSONを送信"""
         try:
-            msg = json.dumps(data, ensure_ascii=False) + "\n"
-            sock.send(msg.encode("utf-8"))
+            send_json(sock, data)
         except Exception as e:
+            # 送信失敗の後始末は各クライアントの受信スレッド（finally）に任せる。
+            # ここで clients を触るとロック再取得やブロードキャスト再帰の
+            # 恐れがあるため、ログだけに留める。
             print(f"[ERROR] 送信失敗: {e}")
 
     def _broadcast(self, data: dict, exclude: socket.socket = None):
         """全クライアントにJSONをブロードキャスト"""
         with self.lock:
+            # 送信はロック外で行う（点: ロック保持中の送信を避ける）
             targets = list(self.clients.keys())
 
         for sock in targets:

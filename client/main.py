@@ -5,7 +5,6 @@ PinSync - クライアント
 担当: Bさん（クライアント・UI担当）
 """
 
-import json
 import socket
 import threading
 import tkinter as tk
@@ -13,24 +12,16 @@ from tkinter import messagebox, simpledialog
 
 import tkintermapview
 
-# ── 設定 ──────────────────────────────────────────
-HOST = "localhost"
-PORT = 9999
-
-# カテゴリごとのピンの色
-CATEGORY_COLORS = {
-    "food": "#E74C3C",  # 赤：食事
-    "hotel": "#3498DB",  # 青：宿泊
-    "sightseeing": "#2ECC71",  # 緑：観光
-    "other": "#F39C12",  # 橙：その他
-}
-
-CATEGORY_LABELS = {
-    "food": "🍜 食事",
-    "hotel": "🏨 宿泊",
-    "sightseeing": "🗼 観光",
-    "other": "📌 その他",
-}
+import protocol
+from protocol import (
+    HOST,
+    PORT,
+    CATEGORY_COLORS,
+    CATEGORY_LABELS,
+    DEFAULT_CATEGORY,
+    MessageReader,
+    send_json,
+)
 
 
 class PinSyncClient:
@@ -175,6 +166,10 @@ class PinSyncClient:
             messagebox.showwarning("入力エラー", "ニックネームを入力してください")
             return
 
+        # サーバーIP欄が空／プレースホルダのままなら既定値にフォールバック
+        if not host or host == "サーバーIP":
+            host = HOST
+
         self.username = name
 
         try:
@@ -184,7 +179,7 @@ class PinSyncClient:
             self.running = True
 
             # 接続直後にユーザー名を送信
-            self._send({"type": "JOIN", "user": self.username})
+            self._send({"type": protocol.JOIN, "user": self.username})
 
             # 受信スレッド開始
             t = threading.Thread(target=self._receive_loop, daemon=True)
@@ -200,7 +195,7 @@ class PinSyncClient:
     def _disconnect(self):
         self.running = False
         if self.sock:
-            self._send({"type": "LEAVE", "user": self.username})
+            self._send({"type": protocol.LEAVE, "user": self.username})
             self.sock.close()
             self.sock = None
         self.status_label.config(text="未接続", fg="#94A3B8")
@@ -210,50 +205,52 @@ class PinSyncClient:
     # ── 送受信 ────────────────────────────────────
 
     def _send(self, data: dict):
-        """JSONをサーバーに送信"""
+        """JSONをサーバーに送信（sendall で部分送信を防ぐ）"""
         if not self.sock:
             return
         try:
-            msg = json.dumps(data, ensure_ascii=False) + "\n"
-            self.sock.send(msg.encode("utf-8"))
+            send_json(self.sock, data)
         except Exception as e:
             self._log(f"⚠️ 送信エラー: {e}")
 
     def _receive_loop(self):
-        """サーバーからのメッセージを受信し続けるスレッド"""
-        buffer = ""
-        while self.running:
-            try:
-                data = self.sock.recv(4096).decode("utf-8")
-                if not data:
+        """
+        サーバーからのメッセージを受信し続けるスレッド。
+
+        受信自体は別スレッドで行うが、Tkinter はスレッドセーフでないため、
+        メッセージ処理（ウィジェット操作を含む）はすべて root.after で
+        メインスレッドに渡す。UTF-8 境界や不正 JSON は MessageReader が吸収する。
+        """
+        reader = MessageReader(self.sock)
+        try:
+            for msg in reader.messages():
+                if not self.running:
                     break
-                buffer += data
-                # 改行区切りで複数メッセージを処理
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if line.strip():
-                        self._handle_message(json.loads(line))
-            except Exception:
-                break
-        self._log("⚠️ サーバーとの接続が切れました")
+                # 直接ウィジェットを触らず、メインスレッドで処理させる
+                self.root.after(0, self._handle_message, msg)
+        except Exception:
+            pass
+        finally:
+            if self.running:
+                self.root.after(0, self._log, "⚠️ サーバーとの接続が切れました")
 
     def _handle_message(self, msg: dict):
-        """受信したJSONを種類ごとに処理"""
+        """受信したJSONを種類ごとに処理（メインスレッドで実行される）"""
         msg_type = msg.get("type")
 
-        if msg_type == "PIN_ADD":
-            self.root.after(0, self._add_marker, msg)
+        if msg_type == protocol.PIN_ADD:
+            self._add_marker(msg)
 
-        elif msg_type == "PIN_REMOVE":
-            self.root.after(0, self._remove_marker, msg)
+        elif msg_type == protocol.PIN_REMOVE:
+            self._remove_marker(msg)
 
-        elif msg_type == "JOIN":
+        elif msg_type == protocol.JOIN:
             self._log(f"👋 {msg.get('user')} が参加しました")
 
-        elif msg_type == "LEAVE":
+        elif msg_type == protocol.LEAVE:
             self._log(f"👋 {msg.get('user')} が退出しました")
 
-        elif msg_type == "CHAT":
+        elif msg_type == protocol.CHAT:
             self._log(f"💬 {msg.get('user')}: {msg.get('text')}")
 
     # ── 地図操作 ──────────────────────────────────
@@ -278,7 +275,7 @@ class PinSyncClient:
 
         self._send(
             {
-                "type": "PIN_ADD",
+                "type": protocol.PIN_ADD,
                 "user": self.username,
                 "lat": lat,
                 "lng": lng,
@@ -290,8 +287,8 @@ class PinSyncClient:
     def _add_marker(self, msg: dict):
         """地図にマーカーを追加"""
         pin_id = msg.get("pin_id", f"{msg['lat']},{msg['lng']}")
-        category = msg.get("category", "other")
-        color = CATEGORY_COLORS.get(category, "#F39C12")
+        category = msg.get("category", DEFAULT_CATEGORY)
+        color = CATEGORY_COLORS.get(category, CATEGORY_COLORS[DEFAULT_CATEGORY])
         label = f"{CATEGORY_LABELS.get(category, '📌')} {msg.get('user', '')}\n{msg.get('comment', '')}"
 
         marker = self.map.set_marker(
@@ -314,7 +311,7 @@ class PinSyncClient:
     # ── ログ ──────────────────────────────────────
 
     def _log(self, text: str):
-        """アクティビティログに追記"""
+        """アクティビティログに追記（必ずメインスレッドから呼ぶこと）"""
         self.log_text.config(state="normal")
         self.log_text.insert("end", text + "\n")
         self.log_text.see("end")
