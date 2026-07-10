@@ -14,6 +14,7 @@ from datetime import datetime
 from tkinter import messagebox, simpledialog, ttk
 
 import tkintermapview
+import os
 
 import protocol
 from protocol import (
@@ -111,11 +112,20 @@ class PinSyncClient:
 
         self._build_panel()
 
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        cache_dir = os.path.join(BASE_DIR, "map_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        db_path = os.path.join(cache_dir, "offline_tiles.db")
+
         # 地図エリア
         map_frame = tk.Frame(main, bg="#1E293B")
         map_frame.pack(side="left", fill="both", expand=True)
 
-        self.map = tkintermapview.TkinterMapView(map_frame, corner_radius=0)
+        self.map = tkintermapview.TkinterMapView(
+            map_frame,
+            corner_radius=0,
+            database_path=db_path,
+        )
         self.map.pack(fill="both", expand=True)
         self.map.set_position(35.6812, 139.7671)  # 初期位置：東京
         self.map.set_zoom(12)
@@ -454,9 +464,7 @@ class PinSyncClient:
             if price <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showwarning(
-                "入力エラー", "金額は1以上の整数で入力してください"
-            )
+            messagebox.showwarning("入力エラー", "金額は1以上の整数で入力してください")
             return
 
         # ピンと同じく、サーバー経由で全員（自分含む）に届いてから画面に反映する
@@ -483,9 +491,7 @@ class PinSyncClient:
     def _on_expense_removed(self, msg: dict):
         """サーバーから支出削除を受信：一覧から除いて合計を再計算"""
         expense_id = msg.get("expense_id")
-        self.expenses = [
-            e for e in self.expenses if e.get("expense_id") != expense_id
-        ]
+        self.expenses = [e for e in self.expenses if e.get("expense_id") != expense_id]
         self._log("🗑 支出を削除しました")
         self._update_split()
         self._refresh_manage_lists()
@@ -551,7 +557,11 @@ class PinSyncClient:
             form, text="時刻 (例 09:30)", bg="#0F172A", fg="#94A3B8", font=("Arial", 9)
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
-            form, text="行き先（ピンから選択）", bg="#0F172A", fg="#94A3B8", font=("Arial", 9)
+            form,
+            text="行き先（ピンから選択）",
+            bg="#0F172A",
+            fg="#94A3B8",
+            font=("Arial", 9),
         ).grid(row=0, column=1, sticky="w", padx=(12, 0))
 
         self.time_entry = tk.Entry(
@@ -657,7 +667,9 @@ class PinSyncClient:
     def _add_timeline_entry(self):
         """「予定を追加」ボタン押下時：入力を検証してサーバーに送信"""
         if not self.sock:
-            messagebox.showinfo("未接続", "先にサーバーに接続してください", parent=self.timeline_win)
+            messagebox.showinfo(
+                "未接続", "先にサーバーに接続してください", parent=self.timeline_win
+            )
             return
 
         # 時刻の検証："9:30" のような入力も "09:30" に正規化する
@@ -666,7 +678,8 @@ class PinSyncClient:
             time_str = datetime.strptime(raw_time, "%H:%M").strftime("%H:%M")
         except ValueError:
             messagebox.showwarning(
-                "入力エラー", "時刻は 09:30 のような形式で入力してください",
+                "入力エラー",
+                "時刻は 09:30 のような形式で入力してください",
                 parent=self.timeline_win,
             )
             return
@@ -732,7 +745,9 @@ class PinSyncClient:
         if not timeline_id:
             return
         self.timeline[timeline_id] = msg
-        self._log(f"🕐 {msg.get('user')} が予定を追加: {msg.get('time')} {msg.get('place', '')}")
+        self._log(
+            f"🕐 {msg.get('user')} が予定を追加: {msg.get('time')} {msg.get('place', '')}"
+        )
         self._refresh_timeline_list()
 
     def _on_timeline_removed(self, msg: dict):
@@ -774,39 +789,65 @@ class PinSyncClient:
 
         # ── ピン一覧 ──
         tk.Label(
-            win, text="📍 ピン一覧", bg="#0F172A", fg="white",
+            win,
+            text="📍 ピン一覧",
+            bg="#0F172A",
+            fg="white",
             font=("Arial", 13, "bold"),
         ).pack(anchor="w", padx=16, pady=(12, 4))
 
         self.pin_listbox = tk.Listbox(
-            win, bg="#1E293B", fg="#CBD5E1", font=("Arial", 11),
-            relief="flat", selectbackground="#065A82", activestyle="none",
+            win,
+            bg="#1E293B",
+            fg="#CBD5E1",
+            font=("Arial", 11),
+            relief="flat",
+            selectbackground="#065A82",
+            activestyle="none",
             height=8,
         )
         self.pin_listbox.pack(fill="both", expand=True, padx=16)
 
         tk.Button(
-            win, text="選択したピンを削除", bg="#E74C3C", fg="white",
-            font=("Arial", 10, "bold"), relief="flat", cursor="hand2",
+            win,
+            text="選択したピンを削除",
+            bg="#E74C3C",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
             command=self._delete_selected_pin,
         ).pack(fill="x", padx=16, pady=(4, 12))
 
         # ── 支出一覧 ──
         tk.Label(
-            win, text="💰 支出一覧（割り勘）", bg="#0F172A", fg="white",
+            win,
+            text="💰 支出一覧（割り勘）",
+            bg="#0F172A",
+            fg="white",
             font=("Arial", 13, "bold"),
         ).pack(anchor="w", padx=16, pady=(0, 4))
 
         self.expense_listbox = tk.Listbox(
-            win, bg="#1E293B", fg="#CBD5E1", font=("Arial", 11),
-            relief="flat", selectbackground="#065A82", activestyle="none",
+            win,
+            bg="#1E293B",
+            fg="#CBD5E1",
+            font=("Arial", 11),
+            relief="flat",
+            selectbackground="#065A82",
+            activestyle="none",
             height=8,
         )
         self.expense_listbox.pack(fill="both", expand=True, padx=16)
 
         tk.Button(
-            win, text="選択した支出を削除", bg="#E74C3C", fg="white",
-            font=("Arial", 10, "bold"), relief="flat", cursor="hand2",
+            win,
+            text="選択した支出を削除",
+            bg="#E74C3C",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            relief="flat",
+            cursor="hand2",
             command=self._delete_selected_expense,
         ).pack(fill="x", padx=16, pady=(4, 12))
 
@@ -835,7 +876,8 @@ class PinSyncClient:
         self.expense_listbox.delete(0, "end")
         for e in self.expenses:
             self.expense_listbox.insert(
-                "end", f"{e.get('title', '')} ¥{e.get('price', 0):,} ({e.get('user', '')})"
+                "end",
+                f"{e.get('title', '')} ¥{e.get('price', 0):,} ({e.get('user', '')})",
             )
 
     def _delete_selected_pin(self):
