@@ -24,6 +24,10 @@ LEAVE = "LEAVE"
 PIN_ADD = "PIN_ADD"
 PIN_REMOVE = "PIN_REMOVE"
 CHAT = "CHAT"
+EXPENSE_ADD = "EXPENSE_ADD"  # 割り勘用の支出追加
+EXPENSE_REMOVE = "EXPENSE_REMOVE"  # 割り勘用の支出削除
+TIMELINE_ADD = "TIMELINE_ADD"  # タイムラインの予定追加
+TIMELINE_REMOVE = "TIMELINE_REMOVE"  # タイムラインの予定削除
 
 # ── カテゴリ定義 ──────────────────────────────────
 CATEGORY_COLORS = {

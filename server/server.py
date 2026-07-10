@@ -25,6 +25,16 @@ class PinSyncServer:
         self.pins: dict[str, dict] = {}
         self.pin_counter = 0
 
+        # 割り勘の支出データを保持（新規参加者に送るため）
+        # [{type, user, title, price, expense_id}, ...]
+        self.expenses: list[dict] = []
+        self.expense_counter = 0
+
+        # タイムライン（予定）データを保持
+        # {timeline_id: {type, user, time, pin_id, place, memo, timeline_id}}
+        self.timeline: dict[str, dict] = {}
+        self.timeline_counter = 0
+
         # サーバーソケット（サンプルコードと同じ書き方）
         self.serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.serversocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -81,6 +91,18 @@ class PinSyncServer:
         elif msg_type == protocol.PIN_REMOVE:
             self._on_pin_remove(sock, msg)
 
+        elif msg_type == protocol.EXPENSE_ADD:
+            self._on_expense_add(sock, msg)
+
+        elif msg_type == protocol.EXPENSE_REMOVE:
+            self._on_expense_remove(sock, msg)
+
+        elif msg_type == protocol.TIMELINE_ADD:
+            self._on_timeline_add(sock, msg)
+
+        elif msg_type == protocol.TIMELINE_REMOVE:
+            self._on_timeline_remove(sock, msg)
+
         elif msg_type == protocol.CHAT:
             self._broadcast(msg)
 
@@ -99,12 +121,22 @@ class PinSyncServer:
             # （ロック保持中にソケット送信すると、遅いクライアントで
             #   全スレッドが停止する恐れがあるため）
             existing_pins = list(self.pins.values())
+            existing_expenses = list(self.expenses)
+            existing_timeline = list(self.timeline.values())
 
         print(f"[JOIN] {username} が参加 (接続数: {len(self.clients)})")
 
         # 既存のピンを新規参加者に送信（ロック外で行う）
         for pin in existing_pins:
             self._send_to(sock, pin)
+
+        # 既存の支出も送信（途中参加でも割り勘の合計が合うように）
+        for expense in existing_expenses:
+            self._send_to(sock, expense)
+
+        # 既存のタイムライン（予定）も送信
+        for entry in existing_timeline:
+            self._send_to(sock, entry)
 
         # 他の参加者に参加通知（本人には送らない = 自分の参加通知を防ぐ）
         self._broadcast({"type": protocol.JOIN, "user": username}, exclude=sock)
@@ -131,6 +163,55 @@ class PinSyncServer:
         )
 
         # 全クライアントにブロードキャスト（送信者本人も自分のピンを表示できる）
+        self._broadcast(msg)
+
+    def _on_expense_add(self, sock: socket.socket, msg: dict):
+        """割り勘の支出追加時の処理（ピン追加と同じパターン）"""
+        with self.lock:
+            self.expense_counter += 1
+            msg["expense_id"] = f"exp_{self.expense_counter}"
+            self.expenses.append(msg)
+
+        print(
+            f"[EXPENSE] {msg.get('user')} が支出追加: "
+            f"{msg.get('title', '')} ¥{msg.get('price', 0)}"
+        )
+
+        # 全クライアントにブロードキャスト（本人も含めて合計を更新させる）
+        self._broadcast(msg)
+
+    def _on_expense_remove(self, sock: socket.socket, msg: dict):
+        """割り勘の支出削除時の処理"""
+        expense_id = msg.get("expense_id")
+        with self.lock:
+            self.expenses = [
+                e for e in self.expenses if e.get("expense_id") != expense_id
+            ]
+
+        print(f"[EXPENSE] 支出削除: {expense_id}")
+        self._broadcast(msg)
+
+    def _on_timeline_add(self, sock: socket.socket, msg: dict):
+        """タイムラインの予定追加時の処理（ピン追加と同じパターン）"""
+        with self.lock:
+            self.timeline_counter += 1
+            timeline_id = f"tl_{self.timeline_counter}"
+            msg["timeline_id"] = timeline_id
+            self.timeline[timeline_id] = msg
+
+        print(
+            f"[TIMELINE] {msg.get('user')} が予定追加: "
+            f"{msg.get('time', '')} {msg.get('place', '')} ({timeline_id})"
+        )
+        self._broadcast(msg)
+
+    def _on_timeline_remove(self, sock: socket.socket, msg: dict):
+        """タイムラインの予定削除時の処理"""
+        timeline_id = msg.get("timeline_id")
+        with self.lock:
+            self.timeline.pop(timeline_id, None)
+
+        print(f"[TIMELINE] 予定削除: {timeline_id}")
         self._broadcast(msg)
 
     def _on_pin_remove(self, sock: socket.socket, msg: dict):
