@@ -13,7 +13,7 @@ import json
 import socket
 
 # ── 接続設定 ──────────────────────────────────────
-HOST = "localhost"
+HOST = "0.0.0.0"
 PORT = 9999
 MAX_CLIENTS = 10
 
