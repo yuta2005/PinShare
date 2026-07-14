@@ -6,7 +6,7 @@
 
 ---
 
-## 🛠️ 技術スタック
+##  技術スタック
 
 | 要素 | 技術 |
 |------|------|
@@ -19,7 +19,7 @@
 
 ---
 
-## 🚀 セットアップ
+## セットアップ
 
 ### 1. リポジトリをクローン
 ```bash
@@ -52,21 +52,21 @@ python -c "import tkintermapview; print('OK')"
 
 ---
 
-## ▶️ 起動方法
+##  起動方法
 
-### サーバー起動（Aさん担当）
+### サーバー起動
 ```powershell
 python server/server.py
 ```
 
-### クライアント起動（Bさん担当・各自）
+### クライアント起動
 ```powershell
 python client/main.py
 ```
 
 ---
 
-## 📁 フォルダ構成
+## フォルダ構成
 
 ```
 PinSync/
@@ -74,11 +74,12 @@ PinSync/
 │   ├── extensions.json   # 推奨拡張機能
 │   └── settings.json     # VS Code 設定
 ├── server/
-│   └── server.py         # TCPサーバー（Aさん担当）
+│   ├─ server.py         # TCPサーバー
+│ 　└── protocol.py       # JSONメッセージ定義（共通）
 ├── client/
-│   └── main.py           # クライアントGUI（Bさん担当）
-├── common/
+│   ├── main.py           # クライアントGUI
 │   └── protocol.py       # JSONメッセージ定義（共通）
+│  
 ├── requirements.txt
 └── README.md
 ```
