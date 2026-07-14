@@ -226,7 +226,11 @@ class PinSyncClient:
         try:
             # サンプルコードと同じ接続方法
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # connect with a short timeout so the GUI does not freeze
+            # for ~20s when the server is unreachable
+            self.sock.settimeout(5)
             self.sock.connect((host, PORT))
+            self.sock.settimeout(None)
             self.running = True
 
             # 接続直後にユーザー名を送信
